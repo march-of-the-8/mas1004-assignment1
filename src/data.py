@@ -8,6 +8,7 @@ Run `pytest tests/test_data.py` after you fill them in.
 """
 
 import numpy as np
+from PIL import Image
 
 # Files with any other extension should be ignored.
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -50,7 +51,21 @@ def prepare_image(image):
     The web page does these same six steps in JavaScript. If your version is
     different, the self test badge at the top of your page turns red.
     """
-    raise NotImplementedError("Problem 2: fill in prepare_image")
+    image = image.convert("RGB")
+    width, height = image.size
+    scale = RESIZE / min(width, height)
+    resized_size = (int(width * scale), int(height * scale))
+    image = image.resize(resized_size, Image.Resampling.BILINEAR)
+
+    left = (image.width - CROP) // 2
+    top = (image.height - CROP) // 2
+    image = image.crop((left, top, left + CROP, top + CROP))
+
+    array = np.asarray(image, dtype=np.float32) / 255.0
+    array = (array - np.asarray(MEAN, dtype=np.float32)) / np.asarray(
+        STD, dtype=np.float32
+    )
+    return np.transpose(array, (2, 0, 1)).astype(np.float32, copy=False)
 
 
 def load_folder(root):
@@ -83,7 +98,31 @@ def load_folder(root):
     Memory: every image becomes 3 x 224 x 224 numbers of 4 bytes, about 0.6 MB.
     750 images is about 450 MB. That fits on Colab and on most laptops.
     """
-    raise NotImplementedError("Problem 2: fill in load_folder")
+    from pathlib import Path
+
+    root = Path(root)
+    class_names = sorted(path.name for path in root.iterdir() if path.is_dir())
+    arrays = []
+    labels = []
+    paths = []
+
+    for label, class_name in enumerate(class_names):
+        class_dir = root / class_name
+        for path in sorted(class_dir.iterdir()):
+            if not path.is_file() or path.suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            try:
+                with Image.open(path) as image:
+                    arrays.append(prepare_image(image))
+                labels.append(label)
+                paths.append(path)
+            except Exception:
+                continue
+
+    X = np.asarray(arrays, dtype=np.float32)
+    if not arrays:
+        X = np.empty((0, 3, CROP, CROP), dtype=np.float32)
+    return X, np.asarray(labels, dtype=np.int64), class_names, paths
 
 
 def split_train_test(X, y, paths, test_ratio=0.2, seed=0):
@@ -102,4 +141,32 @@ def split_train_test(X, y, paths, test_ratio=0.2, seed=0):
         up with a class that has no test images at all, and then your accuracy
         number means nothing.
     """
-    raise NotImplementedError("Problem 2: fill in split_train_test")
+    if not 0 < test_ratio < 1:
+        raise ValueError("test_ratio must be between 0 and 1")
+
+    rng = np.random.default_rng(seed)
+    train_indices = []
+    test_indices = []
+
+    for label in np.unique(y):
+        indices = np.flatnonzero(y == label)
+        indices = rng.permutation(indices)
+        n_test = max(1, int(round(len(indices) * test_ratio)))
+        n_test = min(n_test, len(indices) - 1)
+        test_indices.extend(indices[:n_test])
+        train_indices.extend(indices[n_test:])
+
+    train_indices = np.asarray(train_indices, dtype=np.int64)
+    test_indices = np.asarray(test_indices, dtype=np.int64)
+    train_indices = train_indices[rng.permutation(len(train_indices))]
+    test_indices = test_indices[rng.permutation(len(test_indices))]
+
+    paths = list(paths)
+    return (
+        X[train_indices],
+        y[train_indices],
+        [paths[i] for i in train_indices],
+        X[test_indices],
+        y[test_indices],
+        [paths[i] for i in test_indices],
+    )
